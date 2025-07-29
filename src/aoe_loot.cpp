@@ -18,6 +18,9 @@
 #include "Corpse.h"
 #include "Group.h"
 #include "ObjectMgr.h"
+#include "DatabaseEnv.h"
+
+
 
 using namespace Acore::ChatCommands;
 using namespace WorldPackets;
@@ -59,7 +62,7 @@ bool AoeLootManager::CanPacketReceive(WorldSession* session, WorldPacket& packet
 
                 AoeLootCommandScript::DebugMessage(player, "AOE Looting started.");
                 ChatHandler handler(player->GetSession());
-                handler.ParseCommands(".aoeloot startaoeloot");
+                AoeLootCommandScript::HandleStartAoeLootCommand(&handler, Optional<std::string>{});
             }
         }
     }
@@ -75,7 +78,6 @@ ChatCommandTable AoeLootCommandScript::GetCommands() const
 {
     static ChatCommandTable aoeLootSubCommandTable =
     {
-        { "startaoeloot",   HandleStartAoeLootCommand,          SEC_PLAYER, Console::No },
         { "toggle",         HandleAoeLootToggleCommand,         SEC_PLAYER, Console::No },
         { "on",             HandleAoeLootOnCommand,             SEC_PLAYER, Console::No },
         { "off",            HandleAoeLootOffCommand,            SEC_PLAYER, Console::No },
@@ -184,169 +186,123 @@ bool AoeLootCommandScript::hasPlayerAoeLootDebug(uint64 guid)
 
 // Command handlers implementation. >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> //
 
-bool AoeLootCommandScript::HandleAoeLootOnCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootOnCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    uint64 playerGuid = player->GetGUID().GetRawValue();
-
-    if (AoeLootCommandScript::hasPlayerAoeLootEnabled(playerGuid) && 
-        AoeLootCommandScript::GetPlayerAoeLootEnabled(playerGuid))
+    uint64 guid = player->GetGUID().GetRawValue();
+    if (hasPlayerAoeLootEnabled(guid) && GetPlayerAoeLootEnabled(guid))
     {
-        handler->PSendSysMessage("AOE Loot is already enabled for your character.");
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r уже включен для вашего персонажа.");
         return true;
     }
-    if (AoeLootCommandScript::hasPlayerAoeLootEnabled(playerGuid) && 
-        !AoeLootCommandScript::GetPlayerAoeLootEnabled(playerGuid))
-    {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, true);
-        handler->PSendSysMessage("AOE Loot enabled for your character. Type: '.aoeloot off' to turn AoE Looting off.");
-        return true;
-    }
-   
+    // Включаем
+    SetPlayerAoeLootEnabled(guid, true);
+    handler->PSendSysMessage("|cffff6060[Автолут]:|r включен для вашего персонажа. Отключить '.aoe off'.");
     return true;
 }
 
-bool AoeLootCommandScript::HandleAoeLootOffCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootOffCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    uint64 playerGuid = player->GetGUID().GetRawValue();
-    if (AoeLootCommandScript::hasPlayerAoeLootEnabled(playerGuid) && 
-        AoeLootCommandScript::GetPlayerAoeLootEnabled(playerGuid))
+    uint64 guid = player->GetGUID().GetRawValue();
+
+    // если записи нет — создаём её со значением false
+    if (!hasPlayerAoeLootEnabled(guid))
     {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, false);
-        handler->PSendSysMessage("AOE Loot disabled for your character. Type: '.aoeloot on' to turn AoE Looting on.");
-        DebugMessage(player, "AOE Loot disabled for your character.");
+        SetPlayerAoeLootEnabled(guid, false);
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r отключен для вашего персонажа. Включить '.aoe on'.");
+        return true;
     }
-    else
+
+    // если запись есть и включён — выключаем
+    if (GetPlayerAoeLootEnabled(guid))
     {
-        handler->PSendSysMessage("AOE Loot is already disabled for your character.");
+        SetPlayerAoeLootEnabled(guid, false);
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r отключен для вашего персонажа. Включить '.aoe on'.");
+        DebugMessage(player, "Автолут отключен.");
+    }
+    else // запись есть и уже false
+    {
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r уже отключен для вашего персонажа.");
     }
     return true;
 }
 
-bool AoeLootCommandScript::HandleAoeLootToggleCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootToggleCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    uint64 playerGuid = player->GetGUID().GetRawValue();
-    if (!AoeLootCommandScript::hasPlayerAoeLootEnabled(playerGuid))
-    {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, true);
-        handler->PSendSysMessage("AOE Loot enabled for your character. Type: '.aoeloot off' to turn AoE Looting off.");
-        DebugMessage(player, "AOE Loot enabled for your character.");
-    }
-    else if (!AoeLootCommandScript::GetPlayerAoeLootEnabled(playerGuid))
-    {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, true);
-        handler->PSendSysMessage("AOE Loot is now enabled for your character. Type: '.aoeloot off' to turn AoE Looting off.");
-        DebugMessage(player, "AOE Loot is now enabled for your character.");
-    }
-    else if (AoeLootCommandScript::GetPlayerAoeLootEnabled(playerGuid))
-    {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, false);
-        handler->PSendSysMessage("AOE Loot is now disabled for your character. Type: '.aoeloot on' to turn AoE Looting on.");
-        DebugMessage(player, "AOE Loot is now disabled for your character.");
-    }
+    uint64 guid = player->GetGUID().GetRawValue();
+    if (!hasPlayerAoeLootEnabled(guid))
+        SetPlayerAoeLootEnabled(guid, true);
+
+    bool newState = !GetPlayerAoeLootEnabled(guid);
+    SetPlayerAoeLootEnabled(guid, newState);
+
+    if (newState)
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r включен для вашего персонажа. Отключить '.aoe off'.");
     else
-    {
-        AoeLootCommandScript::SetPlayerAoeLootEnabled(playerGuid, false);
-        handler->PSendSysMessage("AOE Loot disabled for your character. Type: '.aoeloot on' to turn AoE Looting on.");
-        DebugMessage(player, "AOE Loot disabled for your character.");
-    }   
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r отключен для вашего персонажа. Включить '.aoe on'.");
 
+    DebugMessage(player, fmt::format("Autoloot toggled to {}", newState));
     return true;
 }
 
-bool AoeLootCommandScript::HandleAoeLootDebugOnCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootDebugOnCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    if (AoeLootCommandScript::hasPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == 0)
+    uint64 guid = player->GetGUID().GetRawValue();
+    if (!hasPlayerAoeLootDebug(guid) || !GetPlayerAoeLootDebug(guid))
     {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), true);
-        handler->PSendSysMessage("AOE Loot debug mode enabled for your character.");
-        DebugMessage(player, "AOE Loot debug mode enabled for your character.");
-    }   
-    else if (!AoeLootCommandScript::GetPlayerAoeLootDebug(player->GetGUID().GetRawValue()))
-    {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), true);
-        handler->PSendSysMessage("AOE Loot debug mode is now enabled for your character.");
-        DebugMessage(player, "AOE Loot debug mode is now enabled for your character.");
+        SetPlayerAoeLootDebug(guid, true);
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки включен.");
+        DebugMessage(player, "Режим отладки включен.");
     }
     else
     {
-        handler->PSendSysMessage("AOE Loot debug mode is already enabled for your character.");
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки уже включен.");
     }
-    DebugMessage(player, "AOE Loot debug mode enabled for your character.");
-
     return true;
 }
 
-bool AoeLootCommandScript::HandleAoeLootDebugOffCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootDebugOffCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    if (AoeLootCommandScript::hasPlayerAoeLootDebug(player->GetGUID().GetRawValue()) > 0 && 
-        AoeLootCommandScript::GetPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == true)
+    uint64 guid = player->GetGUID().GetRawValue();
+    if (hasPlayerAoeLootDebug(guid) && GetPlayerAoeLootDebug(guid))
     {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), false);
-        handler->PSendSysMessage("AOE Loot debug mode disabled for your character.");
-        DebugMessage(player, "AOE Loot debug mode disabled for your character.");
-    }
-    else if (AoeLootCommandScript::hasPlayerAoeLootDebug(player->GetGUID().GetRawValue()) > 0 && 
-             AoeLootCommandScript::GetPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == false)
-    {
-        handler->PSendSysMessage("AOE Loot debug mode is already disabled for your character.");
-        DebugMessage(player, "AOE Loot debug mode is already disabled for your character.");
+        SetPlayerAoeLootDebug(guid, false);
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки отключен.");
+        DebugMessage(player, "Режим отладки отключен.");
     }
     else
     {
-        handler->PSendSysMessage("AOE Loot debug mode is not enabled for your character.");
-        DebugMessage(player, "AOE Loot debug mode is not enabled for your character.");
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки уже отключен.");
     }
-
     return true;
 }
 
-bool AoeLootCommandScript::HandleAoeLootDebugToggleCommand(ChatHandler* handler, Optional<std::string> /*args*/)
+bool AoeLootCommandScript::HandleAoeLootDebugToggleCommand(ChatHandler* handler, Optional<std::string>)
 {
     Player* player = handler->GetSession()->GetPlayer();
-    if (!player)
-        return true;
+    if (!player) return true;
 
-    if (AoeLootCommandScript::hasPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == 0)
-    {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), true);
-        handler->PSendSysMessage("AOE Loot debug mode enabled for your character.");
-    }
-    else if (AoeLootCommandScript::GetPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == false)
-    {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), true);
-        handler->PSendSysMessage("AOE Loot debug mode is now enabled for your character."); 
-    }
-    else if (AoeLootCommandScript::GetPlayerAoeLootDebug(player->GetGUID().GetRawValue()) == true)
-    {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), false);
-        handler->PSendSysMessage("AOE Loot debug mode is now disabled for your character.");
-    }
+    uint64 guid = player->GetGUID().GetRawValue();
+    bool current = hasPlayerAoeLootDebug(guid) && GetPlayerAoeLootDebug(guid);
+    SetPlayerAoeLootDebug(guid, !current);
+    if (!current)
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки включен.");
     else
-    {
-        AoeLootCommandScript::SetPlayerAoeLootDebug(player->GetGUID().GetRawValue(), false);
-        handler->PSendSysMessage("AOE Loot debug mode disabled for your character.");
-    }
-
+        handler->PSendSysMessage("|cffff6060[Автолут]:|r режим отладки отключен.");
     return true;
 }
 
@@ -361,15 +317,9 @@ void AoeLootCommandScript::DebugMessage(Player* player, const std::string& messa
 {
     if (!player)
         return;
-
     uint64 guid = player->GetGUID().GetRawValue();
-
-    if (AoeLootCommandScript::GetPlayerAoeLootDebug(guid) && AoeLootCommandScript::hasPlayerAoeLootDebug(guid))
-    {
-        // >>>>> This will send debug messages to the player. <<<<< //
-
-        ChatHandler(player->GetSession()).PSendSysMessage("AOE Loot: {}", message);
-    }
+    if (GetPlayerAoeLootDebug(guid) && hasPlayerAoeLootDebug(guid))
+        ChatHandler(player->GetSession()).PSendSysMessage("Автолут: {}", message);
 }
 
 std::vector<Player*> AoeLootCommandScript::GetGroupMembers(Player* player)
@@ -600,50 +550,103 @@ bool AoeLootCommandScript::ProcessLootSlot(Player* player, ObjectGuid lguid, uin
     return true;
 }
 
+// Функция форматирования денег в строку с медью, серебром и золотом
+std::string FormatMoney(uint32 amount)
+{
+    uint32 gold = amount / 10000;
+    uint32 silver = (amount % 10000) / 100;
+    uint32 copper = amount % 100;
+
+    std::ostringstream oss;
+    oss << "+";
+
+    bool hasPrevious = false;
+    if (gold > 0)
+    {
+        oss << gold << " золота";
+        hasPrevious = true;
+    }
+    if (silver > 0)
+    {
+        if (hasPrevious) oss << ", ";
+        oss << silver << " серебра";
+        hasPrevious = true;
+    }
+    if (copper > 0 || !hasPrevious)
+    {
+        if (hasPrevious) oss << ", ";
+        oss << copper << " меди";
+    }
+
+    return oss.str();
+}
+
 bool AoeLootCommandScript::ProcessLootMoney(Player* player, Creature* creature)
 {
     if (!player || !creature || creature->loot.gold == 0)
         return false;
-        
-    uint32 goldAmount = creature->loot.gold;
+
+    // Статическая карта накопления «золота» на каждого игрока
+    static std::map<uint64, uint32> lootAccum;
+
+    uint64 pGuid = player->GetGUID().GetRawValue();
+    uint32 amount = creature->loot.gold;
+    creature->loot.gold = 0;                        // сразу сбросим в трупе
+
+    // Собираем всех получателей (группа или соло)
+    std::vector<Player*> targets;
     Group* group = player->GetGroup();
-    
     if (group && sConfigMgr->GetOption<bool>("AOELoot.Group", true))
     {
-        std::vector<Player*> nearbyMembers;
-
-        // >>>>> Do not remove the hardcoded value. It is here for crash & data protection. <<<<< //
-        
         float range = sConfigMgr->GetOption<float>("AOELoot.Range", 55.0f);
+        float mult = sConfigMgr->GetOption<float>("AOELoot.MoneyShareDistanceMultiplier", 2.0f);
 
-        // >>>>> Do not remove the hardcoded value. It is here for crash & data protection. <<<<< //
-        
-        float moneyShareMultiplier = sConfigMgr->GetOption<float>("AOELoot.MoneyShareDistanceMultiplier", 2.0f);
-        
-        for (GroupReference* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+        for (GroupReference* itr = group->GetFirstMember(); itr; itr = itr->next())
         {
-            Player* member = itr->GetSource();
-            if (member && member->IsWithinDistInMap(player, range * moneyShareMultiplier))
-                nearbyMembers.push_back(member);
+            Player* m = itr->GetSource();
+            if (m && m->IsWithinDistInMap(player, range * mult))
+                targets.push_back(m);
         }
-        
-        if (!nearbyMembers.empty())
+    }
+    if (targets.empty())
+        targets.push_back(player);
+
+    // Раздаём деньги и аккумулируем
+    uint32 perPlayer = amount / uint32(targets.size());
+    for (Player* m : targets)
+    {
+        m->ModifyMoney(perPlayer);
+        lootAccum[m->GetGUID().GetRawValue()] += perPlayer;
+    }
+
+    // Проверим — остались ли ещё в радиусе трупы с деньгами?
+    {
+        float range = sConfigMgr->GetOption<float>("AOELoot.Range", 55.0f);
+        auto corpses = GetValidCorpses(player, range);
+        bool anyLeft = false;
+        for (Creature* c : corpses)
         {
-            uint32 goldPerPlayer = goldAmount / nearbyMembers.size();
-            for (Player* member : nearbyMembers)
+            if (c->loot.gold > 0)
             {
-                member->ModifyMoney(goldPerPlayer);
-                ChatHandler(member->GetSession()).PSendSysMessage("AOE Loot: +{} copper", goldPerPlayer);
+                anyLeft = true;
+                break;
+            }
+        }
+
+        // Если это был последний труп — шлём итоговое сообщение и сбрасываем счётчик
+        if (!anyLeft)
+        {
+            for (Player* m : targets)
+            {
+                uint64 mg = m->GetGUID().GetRawValue();
+                std::string formatted = FormatMoney(lootAccum[mg]);
+                ChatHandler(m->GetSession()).PSendSysMessage(
+                    "|cffff6060[Автолут]:|r Добыто монет: {}", formatted);
+                lootAccum.erase(mg);
             }
         }
     }
-    else
-    {
-        player->ModifyMoney(goldAmount);
-        ChatHandler(player->GetSession()).PSendSysMessage("AOE Loot: +{} copper", goldAmount);
-    }
-    
-    creature->loot.gold = 0;
+
     return true;
 }
 
@@ -670,10 +673,13 @@ void AoeLootCommandScript::ProcessLootRelease(ObjectGuid lguid, Player* player, 
 
 void AoeLootPlayer::OnPlayerLogin(Player* player)
 {
-    if (sConfigMgr->GetOption<bool>("AOELoot.Enable", true) && 
+    if (sConfigMgr->GetOption<bool>("AOELoot.Enable", true) &&
         sConfigMgr->GetOption<bool>("AOELoot.Message", true))
     {
-        ChatHandler(player->GetSession()).PSendSysMessage("AOE looting has been enabled for your character. Commands: .aoeloot debug | .aoeloot off | .aoeloot on");
+        ChatHandler(player->GetSession()).PSendSysMessage(
+            "|cffff6060[Автолут]:|r включен. "
+            "Команды: .aoe off | .aoe on | .aoe tog (переключить)"
+        );
     }
 }
 
@@ -692,7 +698,6 @@ void AoeLootPlayer::OnPlayerLogout(Player* player)
 
 
 // >>>>> Add the scripts for registration as a module. <<<<< //
-
 void AddSC_AoeLoot()
 {
     new AoeLootPlayer();
