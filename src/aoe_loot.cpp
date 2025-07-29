@@ -20,7 +20,12 @@
 #include "ObjectMgr.h"
 #include "DatabaseEnv.h"
 
-
+enum CharacterSettingsStatements
+{
+    CHARACTER_REPLACE_AOESETTING = 0,
+    CHARACTER_SELECT_AOESETTING,
+    CHARACTER_STATEMENT_COUNT
+};
 
 using namespace Acore::ChatCommands;
 using namespace WorldPackets;
@@ -32,6 +37,17 @@ std::map<uint64, bool> AoeLootCommandScript::playerAoeLootDebug;
 // Server packet handler. >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> //
 
 // >>>>> This is the entry point. This packet triggers the AOE loot system. <<<<< //
+
+static void SaveAoeLootSetting(uint32 guid, bool enabled)
+{
+    // Execute умеет брать форматированный SQL с {0}, {1}, ... и подставлять args
+    CharacterDatabase.Execute(
+        "REPLACE INTO character_settings (guid, source, data) "
+        "VALUES ({0}, 'mod-aoeloot', '{1}')",
+        guid,
+        enabled ? 1 : 0
+    );
+}
 
 bool AoeLootManager::CanPacketReceive(WorldSession* session, WorldPacket& packet)
 {
@@ -199,6 +215,7 @@ bool AoeLootCommandScript::HandleAoeLootOnCommand(ChatHandler* handler, Optional
     }
     // Включаем
     SetPlayerAoeLootEnabled(guid, true);
+    SaveAoeLootSetting(guid, true);
     handler->PSendSysMessage("|cffff6060[Автолут]:|r включен для вашего персонажа. Отключить '.aoe off'.");
     return true;
 }
@@ -214,6 +231,7 @@ bool AoeLootCommandScript::HandleAoeLootOffCommand(ChatHandler* handler, Optiona
     if (!hasPlayerAoeLootEnabled(guid))
     {
         SetPlayerAoeLootEnabled(guid, false);
+        SaveAoeLootSetting(guid, false);
         handler->PSendSysMessage("|cffff6060[Автолут]:|r отключен для вашего персонажа. Включить '.aoe on'.");
         return true;
     }
@@ -222,6 +240,7 @@ bool AoeLootCommandScript::HandleAoeLootOffCommand(ChatHandler* handler, Optiona
     if (GetPlayerAoeLootEnabled(guid))
     {
         SetPlayerAoeLootEnabled(guid, false);
+        SaveAoeLootSetting(guid, false);
         handler->PSendSysMessage("|cffff6060[Автолут]:|r отключен для вашего персонажа. Включить '.aoe on'.");
         DebugMessage(player, "Автолут отключен.");
     }
@@ -238,11 +257,13 @@ bool AoeLootCommandScript::HandleAoeLootToggleCommand(ChatHandler* handler, Opti
     if (!player) return true;
 
     uint64 guid = player->GetGUID().GetRawValue();
-    if (!hasPlayerAoeLootEnabled(guid))
-        SetPlayerAoeLootEnabled(guid, true);
+    // Текущее состояние (false, если ни разу не устанавливалось)
+    bool current = hasPlayerAoeLootEnabled(guid) && GetPlayerAoeLootEnabled(guid);
+    bool newState = !current;
 
-    bool newState = !GetPlayerAoeLootEnabled(guid);
+    // Сохраняем и в память, и в БД
     SetPlayerAoeLootEnabled(guid, newState);
+    SaveAoeLootSetting(guid, newState);
 
     if (newState)
         handler->PSendSysMessage("|cffff6060[Автолут]:|r включен для вашего персонажа. Отключить '.aoe off'.");
@@ -252,6 +273,7 @@ bool AoeLootCommandScript::HandleAoeLootToggleCommand(ChatHandler* handler, Opti
     DebugMessage(player, fmt::format("Autoloot toggled to {}", newState));
     return true;
 }
+
 
 bool AoeLootCommandScript::HandleAoeLootDebugOnCommand(ChatHandler* handler, Optional<std::string>)
 {
@@ -673,13 +695,40 @@ void AoeLootCommandScript::ProcessLootRelease(ObjectGuid lguid, Player* player, 
 
 void AoeLootPlayer::OnPlayerLogin(Player* player)
 {
-    if (sConfigMgr->GetOption<bool>("AOELoot.Enable", true) &&
-        sConfigMgr->GetOption<bool>("AOELoot.Message", true))
+    uint32 guid = player->GetGUID().GetRawValue();
+
+    if (auto result = CharacterDatabase.Query(
+        "SELECT data FROM character_settings WHERE guid = {0} AND source = 'mod-aoeloot'",
+        guid))
     {
-        ChatHandler(player->GetSession()).PSendSysMessage(
-            "|cffff6060[Автолут]:|r включен. "
-            "Команды: .aoe off | .aoe on | .aoe tog (переключить)"
-        );
+        std::string data = (*result)[0].Get<std::string>();
+        // Превращаем "0 ", "1 ", " 1" и т.п. в целое число
+        int val = 0;
+        try {
+            val = std::stoi(data);
+        }
+        catch (...) {
+            val = 0;
+        }
+        bool enabled = (val != 0);
+        AoeLootCommandScript::SetPlayerAoeLootEnabled(guid, enabled);
+    }
+    else
+    {
+        bool def = sConfigMgr->GetOption<bool>("AOELoot.Enable", true);
+        AoeLootCommandScript::SetPlayerAoeLootEnabled(guid, def);
+        // фикс: сразу же создаём запись в character_settings
+        SaveAoeLootSetting(guid, def);
+    }
+
+    // 2) И сообщение игроку
+    if (sConfigMgr->GetOption<bool>("AOELoot.Message", true))
+    {
+        ChatHandler ch(player->GetSession());
+        if (AoeLootCommandScript::GetPlayerAoeLootEnabled(guid))
+            ch.PSendSysMessage("|cffff6060[Автолут]:|r включен. .aoe off | .aoe on | .aoe tog");
+        else
+            ch.PSendSysMessage("|cffff6060[Автолут]:|r отключен. Включить '.aoe on'.");
     }
 }
 
